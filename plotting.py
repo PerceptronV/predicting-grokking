@@ -2670,3 +2670,107 @@ def plot_saturation_steps_vs_params(
     else:
         plt.close()
 
+
+def plot_rate_vs_dataset_size(
+    all_results: Dict[int, List[Dict]],
+    k: int = 10,
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> Dict[int, List[Tuple[float, float]]]:
+    """
+    Plot dT/dS (rate of change of saturation time) vs dataset size S in bits.
+
+    For each dimension, finds pairs of data points (n, n+k) and computes:
+        dT/dS = (T(n+k) - T(n)) / (S(n+k) - S(n))
+    where S is the dataset size in bits.
+
+    Args:
+        all_results: Dict mapping dimension to list of result dicts.
+                     Each result dict should have 'n_samples', 'saturation_step',
+                     and 'dataset_bits'.
+        k: Delta in number of samples for rate estimation (default: 10)
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+
+    Returns:
+        Dict mapping dimension to list of (dataset_bits, dT_dS) tuples
+    """
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Get colors from seaborn crest colormap
+    dims = sorted(all_results.keys())
+    colors = sns.color_palette("crest", n_colors=len(dims))
+    dim_to_color = {dim: colors[i] for i, dim in enumerate(dims)}
+
+    rate_data = {}
+
+    for dim in dims:
+        results = all_results[dim]
+
+        # Build mappings from n_samples to saturation_step and dataset_bits
+        samples_to_step = {r['n_samples']: r['saturation_step'] for r in results}
+        samples_to_bits = {r['n_samples']: r['dataset_bits'] for r in results}
+
+        # Find all pairs (n, n+k) and compute dT/dS
+        rates = []
+        for n_samples in sorted(samples_to_step.keys()):
+            if (n_samples + k) in samples_to_step:
+                T_n = samples_to_step[n_samples]
+                T_n_k = samples_to_step[n_samples + k]
+                S_n = samples_to_bits[n_samples]
+                S_n_k = samples_to_bits[n_samples + k]
+                delta_S = S_n_k - S_n
+                if delta_S > 0:
+                    dT_dS = (T_n_k - T_n) / delta_S
+                    rates.append((S_n, dT_dS))
+
+        if not rates:
+            continue
+
+        rate_data[dim] = rates
+
+        # Extract data for plotting
+        x_vals = [r[0] for r in rates]
+        y_vals = [r[1] for r in rates]
+
+        param_count = results[0]['param_count']
+        ax.plot(
+            x_vals,
+            y_vals,
+            marker='o',
+            markersize=8,
+            linewidth=2,
+            color=dim_to_color[dim],
+            label=f'dim={dim} ({param_count:,} params)'
+        )
+
+    ax.set_xlabel('Dataset Size S (bits)', fontsize=14)
+    ax.set_ylabel('dT/dS (steps per bit)', fontsize=14)
+    ax.set_title(f'Rate of Change of Saturation Time (k={k} samples)', fontsize=16, pad=20)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Add legend
+    ax.legend(
+        title='Model Size',
+        loc='best',
+        fontsize=10,
+        title_fontsize=11
+    )
+
+    ax.grid(True, alpha=0.3)
+
+    # Add horizontal line at y=0 for reference
+    ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved rate plot: {save_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return rate_data

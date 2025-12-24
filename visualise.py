@@ -37,7 +37,8 @@ from plotting import (
     plot_speed_vs_model_size,
     plot_combined_speed_analysis,
     plot_saturation_time_vs_capacity_fraction,
-    plot_saturation_steps_vs_params
+    plot_saturation_steps_vs_params,
+    plot_rate_vs_dataset_size
 )
 import consts
 
@@ -1098,6 +1099,29 @@ def speed(args):
         print(f"Capacity constant C = {consts.C:.2f} bits/param")
         print("="*60)
 
+    if args.rate:
+        print(f"\nPlotting dT/dS vs dataset size (k={args.rate_k})...")
+        save_path = os.path.join(plot_dir, f'rate_vs_dataset_size_k{args.rate_k}.pdf') if args.save else None
+        rate_data = plot_rate_vs_dataset_size(
+            all_results,
+            k=args.rate_k,
+            save_path=save_path,
+            show=show
+        )
+
+        if rate_data:
+            print("\n" + "="*60)
+            print(f"RATE ESTIMATION (k={args.rate_k} samples)")
+            print("="*60)
+            for dim in sorted(rate_data.keys()):
+                rates = rate_data[dim]
+                if rates:
+                    avg_rate = np.mean([r[1] for r in rates])
+                    print(f"dim={dim:3d}: avg dT/dS = {avg_rate:.2f} steps/bit")
+            print("="*60)
+        else:
+            print("No paired data points found. Run speed.py with --rate to generate paired data.")
+
     if args.summary:
         print("\n" + "="*70)
         print("SPEED SUMMARY")
@@ -1399,6 +1423,10 @@ Examples:
                                  help='Plot combined analysis (curves + speed vs model size)')
     speed_subparser.add_argument('--fraction', action='store_true',
                                  help='Plot saturation time vs f where f=S/(CP) is capacity fraction')
+    speed_subparser.add_argument('--rate', action='store_true',
+                                 help='Plot dT/dS (rate of change of saturation time) vs dataset size S')
+    speed_subparser.add_argument('--rate-k', type=int, default=10,
+                                 help='Delta k for rate estimation: dT/dS = (T(n+k) - T(n)) / k (default: 10)')
     speed_subparser.add_argument('--summary', action='store_true',
                                  help='Print summary statistics')
 

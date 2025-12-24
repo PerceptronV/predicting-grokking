@@ -393,10 +393,14 @@ def main():
     parser.add_argument('--cpu', action='store_true', help='Force CPU only')
     parser.add_argument('--device', type=str, default=None, 
                         help='Device to use (e.g., "cuda:0", "cpu", "mps")')
-    parser.add_argument('--force', action='store_true', 
+    parser.add_argument('--force', action='store_true',
                         help='Force re-run even if results exist')
     parser.add_argument('--no-show', action='store_true',
                         help='Do not display plots (just save)')
+    parser.add_argument('--rate', action='store_true',
+                        help='Generate additional runs at n+k samples for rate estimation (dT/dS)')
+    parser.add_argument('--rate-k', type=int, default=10,
+                        help='Delta for rate estimation: measure at n and n+k samples (default: 10)')
     
     args = parser.parse_args()
     
@@ -419,12 +423,19 @@ def main():
         args.samples_steps
     ).astype(int)
     dataset_sizes = np.unique(dataset_sizes)  # Remove duplicates
+
+    # If --rate is set, add n+k sizes for each n
+    if args.rate:
+        rate_sizes = dataset_sizes + args.rate_k
+        dataset_sizes = np.unique(np.concatenate([dataset_sizes, rate_sizes]))
     
     n_tokens = args.p + 2
     bits_per_example = np.log2(n_tokens)
     
     print(f"Model dimensions: {args.dim_list}")
     print(f"Dataset sizes: {list(dataset_sizes)}")
+    if args.rate:
+        print(f"Rate estimation: enabled (k={args.rate_k})")
     print(f"p: {args.p}")
     print(f"Full vocab size: {n_tokens}")
     print(f"Bits per example: {bits_per_example:.2f}")
