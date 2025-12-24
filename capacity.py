@@ -424,7 +424,7 @@ def main():
     parser.add_argument('--beta2', type=float, default=0.98, help='Adam beta2')
     
     # Training args
-    parser.add_argument('-b', '--batch_size', type=int, default=512, 
+    parser.add_argument('-b', '--batch-size', type=int, default=512, 
                         help='Batch size')
     parser.add_argument('-e', '--epochs', type=int, default=5000, 
                         help='Maximum epochs')

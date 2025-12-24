@@ -566,7 +566,7 @@ def main():
     parser.add_argument('--beta2', type=float, default=0.98, help='beta2')
     
     # Training args
-    parser.add_argument('-b', '--batch_size', type=int, default=512, help='batch size')
+    parser.add_argument('-b', '--batch-size', type=int, default=512, help='batch size')
     parser.add_argument('-e', '--epochs', type=int, default=200, help='number of epochs')
     parser.add_argument('--early-stopping-threshold', type=float, default=0.99, 
                        help='stop training when val accuracy reaches this threshold (default: 0.99, set to None to disable)')

@@ -2112,7 +2112,559 @@ def plot_cross_exp_critical(
     if save_path:
         plt.savefig(save_path, bbox_inches='tight')
         print(f"Cross-experiment plot saved to {save_path}")
-    
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+
+# =============================================================================
+# Learning Speed Plotting Functions
+# =============================================================================
+
+def plot_learning_speed_curves(
+    all_results: Dict[int, List[Dict]],
+    p: int = 97,
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> Dict[int, Tuple[float, float, int]]:
+    """
+    Plot saturation steps vs dataset size (in bits) for different model sizes.
+
+    Args:
+        all_results: Dict mapping dimension to list of result dicts
+        p: Prime number for computing bits
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+
+    Returns:
+        speed_estimates: Dict mapping param_count to (slope, intercept, dim) of linear fit
+    """
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Sort dims for consistent legend ordering
+    dims = sorted(all_results.keys())
+
+    # Get colors from seaborn crest colormap
+    colors = sns.color_palette("crest", n_colors=len(dims))
+
+    speed_estimates = {}
+
+    for idx, dim in enumerate(dims):
+        results = all_results[dim]
+
+        # Filter to only saturated experiments
+        saturated_results = [r for r in results if r.get('saturated', True)]
+        if not saturated_results:
+            print(f"Warning: No saturated results for dim={dim}")
+            continue
+
+        # Sort by dataset size
+        saturated_results = sorted(saturated_results, key=lambda x: x['n_samples'])
+
+        dataset_bits = [r['dataset_bits'] for r in saturated_results]
+        saturation_steps = [r['saturation_step'] for r in saturated_results]
+        param_count = saturated_results[0]['param_count']
+
+        # Format parameter count for legend
+        if param_count >= 1e6:
+            param_str = f'{param_count/1e6:.1f}M'
+        elif param_count >= 1e3:
+            param_str = f'{param_count/1e3:.0f}K'
+        else:
+            param_str = str(param_count)
+
+        ax.plot(
+            dataset_bits,
+            saturation_steps,
+            marker='o',
+            markersize=8,
+            linewidth=2,
+            color=colors[idx],
+            label=f'{param_str} params (dim={dim})'
+        )
+
+        # Fit linear model for speed estimate
+        if len(dataset_bits) >= 2:
+            slope, intercept = np.polyfit(dataset_bits, saturation_steps, 1)
+            speed_estimates[param_count] = (slope, intercept, dim)
+
+    ax.set_xlabel('Dataset Size (bits)', fontsize=14)
+    ax.set_ylabel('Steps to Saturation', fontsize=14)
+    ax.set_title('Learning Speed: Steps to Memorize Random Data', fontsize=16, pad=20)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Log scale for both axes
+    ax.set_yscale('log')
+
+    # Legend
+    ax.legend(
+        title='Model Size',
+        loc='upper left',
+        fontsize=10,
+        title_fontsize=11
+    )
+
+    ax.grid(True, alpha=0.3, which='both')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved learning speed plot: {save_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return speed_estimates
+
+
+def plot_speed_vs_model_size(
+    speed_estimates: Dict[int, Tuple[float, float, int]],
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> Tuple[float, float, float]:
+    """
+    Plot learning speed (steps per bit) vs model parameter count.
+
+    Args:
+        speed_estimates: Dict mapping param_count to (slope, intercept, dim)
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+
+    Returns:
+        Tuple of (slope_of_log_fit, intercept_of_log_fit, r_squared)
+    """
+    if len(speed_estimates) < 2:
+        print("Not enough data points for speed vs model size plot")
+        return 0.0, 0.0, 0.0
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Sort by parameter count
+    sorted_items = sorted(speed_estimates.items())
+    param_counts = np.array([p for p, _ in sorted_items])
+    slopes = np.array([s[0] for _, s in sorted_items])  # steps per bit
+    dims = [s[2] for _, s in sorted_items]
+
+    # Use crest colormap
+    crest_cmap = sns.color_palette('crest', as_cmap=True)
+
+    scatter = ax.scatter(
+        param_counts, slopes,
+        c=dims, cmap=crest_cmap,
+        s=100, alpha=0.8, edgecolors='black', linewidths=1
+    )
+
+    # Add labels for each point
+    for pc, slope, dim in zip(param_counts, slopes, dims):
+        ax.annotate(f'dim={dim}', (pc, slope), xytext=(5, 5),
+                   textcoords='offset points', fontsize=9)
+
+    # Fit power law: slope = a * params^b  =>  log(slope) = log(a) + b * log(params)
+    log_params = np.log10(param_counts)
+    log_slopes = np.log10(slopes)
+
+    b, log_a = np.polyfit(log_params, log_slopes, 1)
+    a = 10 ** log_a
+
+    # Calculate R²
+    y_pred = log_a + b * log_params
+    ss_res = np.sum((log_slopes - y_pred) ** 2)
+    ss_tot = np.sum((log_slopes - np.mean(log_slopes)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    # Plot fitted curve
+    x_fit = np.logspace(np.log10(param_counts.min() * 0.5),
+                        np.log10(param_counts.max() * 2), 100)
+    y_fit = a * x_fit ** b
+    ax.plot(x_fit, y_fit, '--', color='red', linewidth=2, alpha=0.7,
+            label=f'Fit: speed = {a:.2e} × params^{b:.2f}')
+
+    ax.set_xlabel('Model Parameters', fontsize=14)
+    ax.set_ylabel('Learning Speed (steps per bit)', fontsize=14)
+    ax.set_title('Learning Speed vs Model Size', fontsize=16, pad=20)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+
+    # Add colorbar
+    cbar = plt.colorbar(scatter, ax=ax, label='Dimension')
+    cbar.ax.tick_params(labelsize=11)
+
+    ax.legend(fontsize=11, loc='upper right')
+    ax.grid(True, alpha=0.3, which='both')
+
+    # Add text box with stats
+    textstr = f'Power law exponent: {b:.3f}\n'
+    textstr += f'Coefficient: {a:.2e}\n'
+    textstr += f'R²: {r_squared:.3f}'
+    ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved speed vs model size plot: {save_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return b, log_a, r_squared
+
+
+def plot_combined_speed_analysis(
+    all_results: Dict[int, List[Dict]],
+    p: int = 97,
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> Dict[int, Tuple[float, float, int]]:
+    """
+    Create a combined figure with both learning speed curves and speed vs model size.
+
+    Args:
+        all_results: Dict mapping dimension to list of result dicts
+        p: Prime number for computing bits
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+
+    Returns:
+        speed_estimates: Dict mapping param_count to (slope, intercept, dim)
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+
+    # Sort dims for consistent legend ordering
+    dims = sorted(all_results.keys())
+
+    # Get colors from seaborn crest colormap
+    colors = sns.color_palette("crest", n_colors=len(dims))
+
+    speed_estimates = {}
+
+    # Left plot: Steps to saturation vs dataset bits
+    for idx, dim in enumerate(dims):
+        results = all_results[dim]
+
+        # Filter to only saturated experiments
+        saturated_results = [r for r in results if r.get('saturated', True)]
+        if not saturated_results:
+            continue
+
+        saturated_results = sorted(saturated_results, key=lambda x: x['n_samples'])
+
+        dataset_bits = [r['dataset_bits'] for r in saturated_results]
+        saturation_steps = [r['saturation_step'] for r in saturated_results]
+        param_count = saturated_results[0]['param_count']
+
+        if param_count >= 1e6:
+            param_str = f'{param_count/1e6:.1f}M'
+        elif param_count >= 1e3:
+            param_str = f'{param_count/1e3:.0f}K'
+        else:
+            param_str = str(param_count)
+
+        ax1.plot(
+            dataset_bits,
+            saturation_steps,
+            marker='o',
+            markersize=8,
+            linewidth=2,
+            color=colors[idx],
+            label=f'{param_str}'
+        )
+
+        # Fit linear model for speed estimate
+        if len(dataset_bits) >= 2:
+            slope, intercept = np.polyfit(dataset_bits, saturation_steps, 1)
+            speed_estimates[param_count] = (slope, intercept, dim)
+
+    ax1.set_xlabel('Dataset Size (bits)', fontsize=14)
+    ax1.set_ylabel('Steps to Saturation', fontsize=14)
+    ax1.set_title('Learning Speed Curves', fontsize=16, pad=10)
+    ax1.set_xscale('log')
+    ax1.set_yscale('log')
+    ax1.legend(title='Parameters', loc='upper left', fontsize=10, title_fontsize=11)
+    ax1.grid(True, alpha=0.3, which='both')
+    ax1.tick_params(axis='both', which='major', labelsize=12)
+
+    # Right plot: Speed vs model size
+    if len(speed_estimates) >= 2:
+        sorted_items = sorted(speed_estimates.items())
+        param_counts = np.array([p for p, _ in sorted_items])
+        slopes = np.array([s[0] for _, s in sorted_items])
+        dims_plot = [s[2] for _, s in sorted_items]
+
+        crest_cmap = sns.color_palette('crest', as_cmap=True)
+
+        scatter = ax2.scatter(
+            param_counts, slopes,
+            c=dims_plot, cmap=crest_cmap,
+            s=100, alpha=0.8, edgecolors='black', linewidths=1
+        )
+
+        for pc, slope, dim in zip(param_counts, slopes, dims_plot):
+            ax2.annotate(f'{dim}', (pc, slope), xytext=(5, 5),
+                        textcoords='offset points', fontsize=9)
+
+        # Fit power law
+        log_params = np.log10(param_counts)
+        log_slopes = np.log10(slopes)
+        b, log_a = np.polyfit(log_params, log_slopes, 1)
+        a = 10 ** log_a
+
+        y_pred = log_a + b * log_params
+        ss_res = np.sum((log_slopes - y_pred) ** 2)
+        ss_tot = np.sum((log_slopes - np.mean(log_slopes)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+        x_fit = np.logspace(np.log10(param_counts.min() * 0.5),
+                            np.log10(param_counts.max() * 2), 100)
+        y_fit = a * x_fit ** b
+        ax2.plot(x_fit, y_fit, '--', color='red', linewidth=2, alpha=0.7,
+                label=f'speed ∝ params^{b:.2f}')
+
+        ax2.set_xlabel('Model Parameters', fontsize=14)
+        ax2.set_ylabel('Learning Speed (steps/bit)', fontsize=14)
+        ax2.set_title('Speed vs Model Size', fontsize=16, pad=10)
+        ax2.set_xscale('log')
+        ax2.set_yscale('log')
+
+        cbar = plt.colorbar(scatter, ax=ax2, label='Dimension')
+        cbar.ax.tick_params(labelsize=11)
+
+        ax2.legend(fontsize=11, loc='upper right')
+        ax2.grid(True, alpha=0.3, which='both')
+        ax2.tick_params(axis='both', which='major', labelsize=12)
+
+        textstr = f'Exponent: {b:.3f}\nR²: {r_squared:.3f}'
+        ax2.text(0.05, 0.95, textstr, transform=ax2.transAxes, fontsize=11,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved combined speed analysis plot: {save_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return speed_estimates
+
+
+def plot_saturation_time_vs_capacity_fraction(
+    all_results: Dict[int, List[Dict]],
+    C: float,
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> Tuple[float, float, float]:
+    """
+    Plot saturation time vs f where f = S/(CP) is the fraction of total capacity.
+    Uses log y-scale and fits an exponential curve: steps = a * exp(b * f)
+
+    Args:
+        all_results: Dict mapping dimension to list of result dicts
+        C: Capacity constant (bits per parameter)
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+
+    Returns:
+        Tuple of (exponent, coefficient, r_squared) from exponential fit
+    """
+    # Collect all data points across all dimensions and dataset sizes
+    f_values = []
+    saturation_steps_values = []
+    dims = []
+    param_counts = []
+
+    for dim, results in all_results.items():
+        for result in results:
+            P = result['param_count']
+            S = result['dataset_bits']
+            saturation_step = result['saturation_step']
+
+            # Calculate fraction of capacity: f = S / (C * P)
+            f = S / (C * P)
+
+            f_values.append(f)
+            saturation_steps_values.append(saturation_step)
+            dims.append(dim)
+            param_counts.append(P)
+
+    if len(f_values) < 2:
+        print("Not enough data points for capacity fraction analysis")
+        return 0.0, 0.0, 0.0
+
+    f_values = np.array(f_values)
+    saturation_steps_values = np.array(saturation_steps_values)
+    dims = np.array(dims)
+
+    # Fit exponential in semi-log space: log(steps) = b * f + log(a)
+    # This gives us: steps = a * exp(b * f)
+    log_steps = np.log(saturation_steps_values)
+
+    b, log_a = np.polyfit(f_values, log_steps, 1)
+    a = np.exp(log_a)
+
+    # Calculate R² in log space
+    y_pred_log = b * f_values + log_a
+    ss_res = np.sum((log_steps - y_pred_log) ** 2)
+    ss_tot = np.sum((log_steps - np.mean(log_steps)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    # Create plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Color by dimension
+    unique_dims = sorted(set(dims))
+    colors = sns.color_palette("crest", n_colors=len(unique_dims))
+    dim_to_color = {d: colors[i] for i, d in enumerate(unique_dims)}
+
+    for dim in unique_dims:
+        mask = dims == dim
+        ax.scatter(
+            f_values[mask],
+            saturation_steps_values[mask],
+            c=[dim_to_color[dim]],
+            s=100,
+            alpha=0.7,
+            edgecolors='black',
+            linewidths=1,
+            label=f'dim={dim}'
+        )
+
+    # Plot fitted exponential curve
+    x_fit = np.linspace(f_values.min() * 0.95, f_values.max() * 1.05, 100)
+    y_fit = a * np.exp(b * x_fit)
+    ax.plot(x_fit, y_fit, '--', color='red', linewidth=2, alpha=0.7,
+            label=f'Fit: steps = {a:.1f} × exp({b:.2f} × f)')
+
+    ax.set_xlabel('f = S/(CP) (Capacity Fraction)', fontsize=14)
+    ax.set_ylabel('Steps to Saturation', fontsize=14)
+    ax.set_title(f'Saturation Time vs Capacity Fraction (C={C:.2f} bits/param)', fontsize=16, pad=20)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Use log y-scale only
+    ax.set_yscale('log')
+
+    ax.legend(fontsize=10, loc='best')
+    ax.grid(True, alpha=0.3, which='both')
+
+    # Add text box with stats
+    textstr = f'Exponential: steps = {a:.1f} × exp({b:.2f} × f)\n'
+    textstr += f'Exponent: {b:.2f}\n'
+    textstr += f'R²: {r_squared:.3f}\n'
+    textstr += f'C = {C:.2f} bits/param'
+    ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=11,
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved capacity fraction plot: {save_path}")
+
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return b, a, r_squared
+
+
+def plot_saturation_steps_vs_params(
+    all_results: Dict[int, List[Dict]],
+    save_path: Optional[str] = None,
+    show: bool = True
+) -> None:
+    """
+    Plot steps to saturation vs model parameter count for different dataset sizes.
+
+    Args:
+        all_results: Dict mapping dimension to list of result dicts
+        save_path: Path to save the plot (optional)
+        show: Whether to show the plot
+    """
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    # Collect all unique dataset sizes across all dimensions
+    all_dataset_sizes = set()
+    for results in all_results.values():
+        for result in results:
+            all_dataset_sizes.add(result['n_samples'])
+
+    # Sort dataset sizes for consistent ordering
+    sorted_dataset_sizes = sorted(all_dataset_sizes)
+
+    # Get colors from seaborn crest colormap
+    colors = sns.color_palette("crest", n_colors=len(sorted_dataset_sizes))
+    dataset_size_to_color = {size: colors[i] for i, size in enumerate(sorted_dataset_sizes)}
+
+    # Group by dataset size
+    dataset_size_groups = {}
+    for dim, results in all_results.items():
+        for result in results:
+            n_samples = result['n_samples']
+            if n_samples not in dataset_size_groups:
+                dataset_size_groups[n_samples] = []
+            dataset_size_groups[n_samples].append(result)
+
+    # Plot each dataset size as a separate series
+    for n_samples in sorted_dataset_sizes:
+        if n_samples not in dataset_size_groups:
+            continue
+
+        results = dataset_size_groups[n_samples]
+        # Sort by parameter count
+        results = sorted(results, key=lambda x: x['param_count'])
+
+        param_counts = [r['param_count'] for r in results]
+        saturation_steps = [r['saturation_step'] for r in results]
+
+        ax.plot(
+            param_counts,
+            saturation_steps,
+            marker='o',
+            markersize=8,
+            linewidth=2,
+            color=dataset_size_to_color[n_samples],
+            label=f'{n_samples} samples'
+        )
+
+    ax.set_xlabel('Model Parameters', fontsize=14)
+    ax.set_ylabel('Steps to Saturation', fontsize=14)
+    ax.set_title('Steps to Saturation vs Model Size', fontsize=16, pad=20)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+    # Use log scale for both axes
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+
+    # Legend
+    ax.legend(
+        title='Dataset Size',
+        loc='best',
+        fontsize=10,
+        title_fontsize=11
+    )
+
+    ax.grid(True, alpha=0.3, which='both')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved saturation steps vs params plot: {save_path}")
+
     if show:
         plt.show()
     else:
